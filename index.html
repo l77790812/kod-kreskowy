@@ -77,7 +77,7 @@ h1{font-size:1.3rem;margin:0}
 <div class="wrap">
   <header>
     <h1>Cyfry na kod kreskowy</h1>
-    <p class="sub">Nakieruj aparat na cyfry tak, żeby wypełniły ramkę. Trzymaj telefon prosto i nieruchomo.</p>
+    <p class="sub">Nakieruj aparat na kod z vouchera (np. PC2W…) tak, żeby wypełnił ramkę. Trzymaj telefon prosto i nieruchomo.</p>
   </header>
 
   <div class="cam" id="cam">
@@ -90,11 +90,14 @@ h1{font-size:1.3rem;margin:0}
   </div>
 
   <div class="settings">
-    <label for="len">Liczba cyfr:</label>
+    <label for="prefix">Początek kodu:</label>
+    <input type="text" id="prefix" value="PC2W" maxlength="8" autocapitalize="characters" autocomplete="off"
+      style="font:700 1rem var(--mono);width:7.5em;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--fg)">
+    <label for="len">cyfr po nim:</label>
     <select id="len">
-      <option value="10" selected>dokładnie 10</option>
-      <option value="9">dokładnie 9</option>
-      <option value="any">dowolna (6–14)</option>
+      <option value="12" selected>12</option>
+      <option value="10">10</option>
+      <option value="any">dowolnie (8–14)</option>
     </select>
   </div>
 
@@ -108,7 +111,7 @@ h1{font-size:1.3rem;margin:0}
   <section class="label" id="label">
     <span class="tag" id="tag">Przykład</span>
     <svg id="barcode" role="img" aria-label="Kod kreskowy"></svg>
-    <div class="digits" id="digits">5901234123</div>
+    <div class="digits" id="digits">PC2W123456789012</div>
   </section>
 
   <div class="row">
@@ -116,8 +119,8 @@ h1{font-size:1.3rem;margin:0}
   </div>
 
   <section class="manual">
-    <label for="manual">Popraw albo wpisz cyfry ręcznie</label>
-    <input type="text" id="manual" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="0000000000">
+    <label for="manual">Popraw albo wpisz ręcznie cyfry po „<span id="pfxlbl">PC2W</span>”</label>
+    <input type="text" id="manual" inputmode="numeric" autocomplete="off" maxlength="14" placeholder="000000000000">
     <div class="row">
       <label class="btn btn-ghost" for="photo">Wczytaj zdjęcie</label>
       <input class="hidden-file" type="file" id="photo" accept="image/*">
@@ -143,31 +146,49 @@ let worker = null, stream = null, scanning = false, busy = false, last = "", sam
 
 function setStatus(m, k){ statusEl.textContent = m; statusEl.className = "status" + (k ? " " + k : ""); }
 
-function draw(d, example){
-  JsBarcode("#barcode", d, {format:"CODE128", displayValue:false, height:110, width: d.length > 12 ? 2 : 3,
+const prefix = () => $("prefix").value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+// rysuje kod z pełnego ciągu: prefiks + cyfry
+function draw(full, example){
+  JsBarcode("#barcode", full, {format:"CODE128", displayValue:false, height:110, width: full.length > 14 ? 2 : 3,
     margin:12, background:"#ffffff", lineColor:"#000000"});
-  $("digits").textContent = d;
+  $("digits").textContent = full;
   $("tag").textContent = example ? "Przykład" : "Gotowe do skanowania";
 }
-draw("5901234123", true);
+draw("PC2W123456789012", true);
 
 function lenOk(n){
   const v = $("len").value;
-  if (v === "any") return n >= 6 && n <= 14;
+  if (v === "any") return n >= 8 && n <= 14;
   return n === Number(v);
 }
 
-// Z surowego tekstu wybiera ciąg cyfr pasujący do ustawionej długości
+// Z surowego tekstu wyciąga cyfry stojące po prefiksie (np. PC2W).
+// Rozpoznawanie czasem gubi lub przekręca litery, więc kolejno:
+// 1) pełny prefiks, 2) ostatnia litera prefiksu (np. W), 3) sam ciąg cyfr,
+//    z którego odcinamy cyfry należące do prefiksu (np. „2” z PC2W).
 function pickDigits(text){
-  // grupy cyfr rozdzielone najwyżej spacją/kreską/kropką sklejamy
-  const runs = (text.match(/\d[\d \-.]*\d|\d/g) || []).map(r => r.replace(/\D/g, ""));
-  const all = text.replace(/\D/g, "");
-  const cands = [...runs, all];
+  const t = text.toUpperCase().replace(/[ \t\-.]/g, "");
+  const p = prefix();
   const v = $("len").value;
-  for (const c of cands) if (lenOk(c.length)) return c;
-  if (v !== "any"){                       // np. 11 cyfr, z czego 10 pasuje — weź najdłuższy pasujący fragment
-    const n = Number(v);
-    for (const c of runs) if (c.length > n && c.length <= n + 2) return null;
+  const n = v === "any" ? null : Number(v);
+  const want = n ? "(\\d{" + n + "})(?!\\d)" : "(\\d{8,14})(?!\\d)";
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (p){
+    let m = t.match(new RegExp(esc(p) + want));
+    if (m) return m[1];
+    const lastLetter = (p.match(/[A-Z](?=[^A-Z]*$)/) || [])[0];
+    if (lastLetter){
+      const tail = p.slice(p.lastIndexOf(lastLetter) + 1);       // cyfry prefiksu po ostatniej literze
+      m = t.match(new RegExp(lastLetter + esc(tail) + want));
+      if (m) return m[1];
+    }
+  }
+  const pDigits = p.replace(/\D/g, "");                          // np. "2" z PC2W
+  const runs = t.match(/\d+/g) || [];
+  for (const r of runs){
+    if (lenOk(r.length)) return r;
+    if (pDigits && r.startsWith(pDigits) && lenOk(r.length - pDigits.length)) return r.slice(pDigits.length);
   }
   return null;
 }
@@ -224,18 +245,36 @@ async function ocr(c, psm){
   return data.text || "";
 }
 
+// rozpoznawanie dopuszcza tylko cyfry i litery z prefiksu — mniej pomyłek
+async function setWhitelist(){
+  if (!worker) return;
+  const letters = [...new Set(prefix().replace(/\d/g, ""))].join("");
+  await worker.setParameters({ tessedit_char_whitelist: "0123456789" + letters });
+}
+
 async function initOCR(){
   worker = await Tesseract.createWorker("eng", 1);
-  await worker.setParameters({ tessedit_char_whitelist: "0123456789" });
+  await setWhitelist();
+}
+
+// surowe cyfry bez cyfr należących do prefiksu (do podpowiedzi i poprawki ręcznej)
+function rawDigits(text){
+  const t = text.toUpperCase().replace(/\s/g, "");
+  const p = prefix();
+  let rest = t;
+  const i = p ? t.indexOf(p) : -1;
+  if (i >= 0) rest = t.slice(i + p.length);
+  return rest.replace(/\D/g, "");
 }
 
 function accept(d){
-  draw(d, false);
+  const full = prefix() + d;
+  draw(full, false);
   $("manual").value = d;
   scanning = false;
   guide.classList.add("hit");
-  $("camhint").textContent = "Odczytano: " + d;
-  setStatus("Odczytano " + d.length + " cyfr: " + d + ". Sprawdź, czy się zgadzają.", "ok");
+  $("camhint").textContent = "Odczytano: " + full;
+  setStatus("Odczytano: " + full + ". Sprawdź, czy zgadza się z voucherem.", "ok");
   if (navigator.vibrate) navigator.vibrate(80);
 }
 
@@ -247,9 +286,9 @@ async function tick(){
       const c = prepare(video, video.videoWidth, video.videoHeight, true, false);
       const text = await ocr(c, 7);
       showDebug(c, text);
-      const raw = text.replace(/\D/g, "");
+      const seen = text.toUpperCase().replace(/\s/g, "");
       const d = pickDigits(text);
-      $("camhint").textContent = raw ? "Widzę: " + raw + " (" + raw.length + ")" : "Szukam cyfr w ramce…";
+      $("camhint").textContent = seen ? "Widzę: " + seen : "Szukam kodu w ramce…";
       if (d){
         same = (d === last) ? same + 1 : 1; last = d;
         if (same >= CONFIRM) accept(d);
@@ -270,7 +309,7 @@ async function deepRead(src, sw, sh, useGuide){
     showDebug(c, text);
     const d = pickDigits(text);
     if (d) return {d};
-    const raw = text.replace(/\D/g, "");
+    const raw = rawDigits(text);
     if (raw.length > bestRaw.length) bestRaw = raw;
   }
   return {raw: bestRaw};
@@ -286,11 +325,12 @@ async function snap(src, sw, sh, useGuide){
     const r = await deepRead(src, sw, sh, useGuide);
     if (r.d) accept(r.d);
     else if (r.raw){
-      $("manual").value = r.raw.slice(0, 14);
-      draw(r.raw.slice(0, 14), false);
-      setStatus("Odczytano " + r.raw.length + " cyfr: " + r.raw + ". Popraw je w polu poniżej, jeśli trzeba.", "bad");
+      const d = r.raw.slice(0, 14);
+      $("manual").value = d;
+      draw(prefix() + d, false);
+      setStatus("Odczytano " + r.raw.length + " cyfr po " + prefix() + ": " + r.raw + ". Popraw je w polu poniżej, jeśli trzeba.", "bad");
     } else {
-      setStatus("Nie widzę cyfr. Podejdź bliżej, popraw światło i ustaw cyfry poziomo w ramce.", "bad");
+      setStatus("Nie widzę kodu. Podejdź bliżej, popraw światło i ustaw kod poziomo w ramce.", "bad");
       scanning = wasScanning;
     }
   }catch(e){ console.error(e); setStatus("Błąd odczytu. Spróbuj ponownie.", "bad"); scanning = wasScanning; }
@@ -327,15 +367,30 @@ $("againBtn").onclick = () => {
   if (!stream) return startCamera();
   scanning = true; last = ""; same = 0;
   guide.classList.remove("hit");
-  $("camhint").textContent = "Szukam cyfr w ramce…";
+  $("camhint").textContent = "Szukam kodu w ramce…";
   setStatus("");
 };
 $("len").onchange = () => { last = ""; same = 0; };
 
+function redrawManual(){
+  const d = $("manual").value;
+  if (d.length >= 1){
+    draw(prefix() + d, false);
+    setStatus(lenOk(d.length) ? "Kod gotowy." : d.length + " cyfr po " + prefix(), lenOk(d.length) ? "ok" : "");
+  }
+}
 $("manual").addEventListener("input", e => {
   const d = e.target.value.replace(/\D/g, "").slice(0, 14);
   if (e.target.value !== d) e.target.value = d;
-  if (d.length >= 1){ draw(d, false); setStatus(lenOk(d.length) ? "Kod gotowy." : d.length + " cyfr", lenOk(d.length) ? "ok" : ""); }
+  redrawManual();
+});
+$("prefix").addEventListener("input", e => {
+  const p = prefix();
+  if (e.target.value !== p) e.target.value = p;
+  $("pfxlbl").textContent = p || "prefiksie";
+  last = ""; same = 0;
+  setWhitelist().catch(() => {});
+  redrawManual();
 });
 
 $("photo").addEventListener("change", async e => {
@@ -356,7 +411,7 @@ $("fullBtn").onclick = async () => {
   startCamera();
   try{
     await initOCR();
-    $("camhint").textContent = "Szukam cyfr w ramce…";
+    $("camhint").textContent = "Szukam kodu w ramce…";
     tick();
   }catch(e){
     console.error(e);
