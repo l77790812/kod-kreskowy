@@ -126,6 +126,7 @@ const CONFIRM = 2;   // ile razy z rzędu ten sam odczyt na żywo, zanim uznamy 
 let worker = null, stream = null, scanning = false, busy = false, last = "", same = 0;
 let nativeDetector = null;
 let previousAccepted = "";
+let missingFrames = 0; // brak kodu w kolejnych analizowanych klatkach
 
 function setStatus(m, k){ statusEl.textContent = m; statusEl.className = "status" + (k ? " " + k : ""); }
 
@@ -256,7 +257,8 @@ function accept(d){
   const full = prefix() + d;
   draw(full, false);
   $("manual").value = d;
-  scanning = false;
+  scanning = true; // kamera i OCR nadal pracują, by wykryć odsunięcie telefonu
+  missingFrames = 0;
   previousAccepted = full;
   guide.classList.add("hit");
   guide.style.borderColor = "#28ef76";
@@ -285,9 +287,24 @@ async function tick(){
       const d = pickDigits(text);
       $("camhint").textContent = "";
       if (d){
-        same = (d === last) ? same + 1 : 1; last = d;
-        if (same >= CONFIRM) accept(d);
-      } else { same = 0; last = ""; }
+        missingFrames = 0;
+        if (previousAccepted) {
+          // Kod nadal jest w kadrze: utrzymuj zieloną ramkę,
+          // nie nadpisuj wyniku i nie skanuj ponownie automatycznie.
+        } else {
+          same = (d === last) ? same + 1 : 1; last = d;
+          if (same >= CONFIRM) accept(d);
+        }
+      } else {
+        same = 0; last = "";
+        if (previousAccepted && ++missingFrames >= 2) {
+          previousAccepted = "";
+          missingFrames = 0;
+          guide.classList.remove("hit");
+          guide.style.borderColor = "";
+          // Zachowaj ostatni kod kreskowy na ekranie.
+        }
+      }
     }catch(e){ console.error(e); }
     busy = false;
   }
@@ -345,7 +362,7 @@ async function startCamera(){
       const t = stream.getVideoTracks()[0], caps = t.getCapabilities ? t.getCapabilities() : {};
       if (caps.focusMode && caps.focusMode.includes("continuous")) await t.applyConstraints({advanced:[{focusMode:"continuous"}]});
     }catch{}
-    scanning = true; last = ""; same = 0;
+    scanning = true; last = ""; same = 0; previousAccepted = ""; missingFrames = 0;
     guide.classList.remove("hit"); guide.style.borderColor = ""; guide.style.borderColor = "";
     setStatus("");
   }catch(e){
@@ -361,7 +378,7 @@ $("snapBtn").onclick = () => {
 };
 $("againBtn").onclick = () => {
   if (!stream) return startCamera();
-  scanning = true; last = ""; same = 0;
+  scanning = true; last = ""; same = 0; previousAccepted = ""; missingFrames = 0;
   guide.classList.remove("hit"); guide.style.borderColor = "";
   $("camhint").textContent = "";
   setStatus("");
